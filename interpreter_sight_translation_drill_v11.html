@@ -1,0 +1,682 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Sight Translation Drill</title>
+
+<script src="https://unpkg.com/mammoth/mammoth.browser.min.js"></script>
+
+<style>
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial;
+  background: #f7f8fa;
+  margin: 0;
+  padding: 0;
+}
+
+.container {
+  max-width: 720px;
+  margin: auto;
+  padding: 24px;
+}
+
+.header {
+  text-align: center;
+  margin-bottom: 20px;
+}
+
+.headset-icon {
+  font-size: 48px;
+  margin-bottom: 6px;
+}
+
+.title {
+  font-size: 26px;
+  font-weight: 600;
+  color: #1e1e1e;
+}
+
+.card {
+  background: white;
+  padding: 16px;
+  border-radius: 10px;
+  box-shadow: 0 2px 6px rgba(0,0,0,0.06);
+  margin-bottom: 16px;
+}
+
+textarea {
+  width: 100%;
+  height: 120px;
+  border-radius: 8px;
+  border: 1px solid #ddd;
+  padding: 8px;
+  font-size: 14px;
+  font-family: Arial, "맑은 고딕", "Malgun Gothic", sans-serif;
+}
+
+button {
+  padding: 10px 14px;
+  border-radius: 8px;
+  border: none;
+  background: #e5e7eb;
+  cursor: pointer;
+  margin-right: 6px;
+  margin-top: 6px;
+}
+
+button:hover {
+  background: #d1d5db;
+}
+
+.start-btn {
+  background: #2ecc71;
+  color: white;
+  font-weight: bold;
+  padding: 12px 36px;
+  font-size: 15px;
+}
+
+.sessionRow {
+  border: 1px solid #eee;
+  padding: 8px;
+  border-radius: 8px;
+  margin-bottom: 6px;
+}
+
+.chunkPreview {
+  font-family: Arial, sans-serif;
+  font-size: 14px;
+  padding: 6px;
+  border-radius: 6px;
+  border: 1px solid #ddd;
+  width: 100%;
+  box-sizing: border-box;
+  height: 32px;
+  resize: none;
+  overflow: hidden;
+}
+
+#drillView {
+  display: none;
+  height: 100vh;
+  justify-content: center;
+  align-items: center;
+  flex-direction: column;
+  background: white;
+}
+
+#drillChunk {
+  font-size: 28px;
+  text-align: center;
+  max-width: 600px;
+  margin-bottom: 20px;
+}
+</style>
+</head>
+<body>
+
+<div class="container" id="setupView">
+
+<div class="header">
+<div class="headset-icon">📖</div>
+<div class="title">Sight Translation Drill</div>
+</div>
+
+<div class="card">
+<input type="file" id="fileInput" accept=".txt,.docx" multiple>
+<div id="sessionList"></div>
+</div>
+
+<div class="card">
+<textarea id="inputText" placeholder="Paste or type your speech here"></textarea>
+
+<br><br>
+
+<label>
+<input type="radio" name="mode" value="BtoA" checked>
+Eng → Kor
+</label>
+
+<label style="margin-left:10px;">
+<input type="radio" name="mode" value="AtoB">
+Kor → Eng
+</label>
+
+<br><br>
+
+Min words:
+<input type="number" id="minWordsSelect" value="3" min="1" max="20">
+
+Max words:
+<input type="number" id="maxWordsSelect" value="8" min="1" max="40">
+
+Difficulty:
+<select id="difficultySelect">
+  <option value="easy">Easy</option>
+  <option value="normal" selected>Normal</option>
+  <option value="hard">Hard</option>
+  <option value="expert">Expert</option>
+</select>
+
+<br><br>
+
+<button id="generateBtn">Generate Chunks</button>
+<button id="recordBtn">Record</button>
+<button id="stopRecordBtn">Stop Recording</button>
+<button id="startDrillBtn" class="start-btn">Start Drill</button>
+
+<br><br>
+
+<div id="chunksDiv"></div>
+
+</div>
+
+<div class="card">
+<h4>Recordings</h4>
+<div id="recordingsList"></div>
+</div>
+
+</div>
+
+<div id="drillView">
+<div id="drillChunk"></div>
+<canvas id="timerCanvas" width="200" height="200"></canvas>
+
+<div>
+<button id="nextBtn">Next</button>
+<button id="recordBtn2">Record</button>
+<button id="stopRecordBtn2">Stop Recording</button>
+<button id="exitBtn">Exit</button>
+</div>
+
+</div>
+
+<script>
+'use strict';
+
+// =======================
+// GLOBAL STATE
+// =======================
+
+let chunks = [];
+let current = 0;
+let drillRunning = false;
+let drillTimeout = null;
+
+let recordings = [];
+let mediaRecorder = null;
+let audioChunks = [];
+
+let mode = 'BtoA';
+let difficulty = 'normal';
+
+const DIFFICULTY_FACTOR = {
+  easy: 1.3,
+  normal: 1.0,
+  hard: 0.75,
+  expert: 0.6
+};
+
+const TIME_PER_WORD = {
+  BtoA: 800,
+  AtoB: 1000
+};
+
+// =======================
+// SESSION STORAGE
+// =======================
+
+let sessions = [];
+let activeSessionId = null;
+let drillStartTime = null;
+
+function saveSessions() {
+  localStorage.setItem('interpreterSessions', JSON.stringify(sessions));
+}
+
+function loadSessions() {
+  const stored = localStorage.getItem('interpreterSessions');
+  if (stored) sessions = JSON.parse(stored);
+  renderSessions();
+}
+
+function addSession(name, text) {
+  sessions.push({
+    id: Date.now(),
+    name,
+    text,
+    practiceCount: 0,
+    totalPracticeTime: 0,
+    lastPracticeAt: null
+  });
+  saveSessions();
+  renderSessions();
+}
+
+function deleteSession(id) {
+  sessions = sessions.filter(s => s.id !== id);
+  saveSessions();
+  renderSessions();
+}
+
+function renderSessions() {
+
+  const list = document.getElementById('sessionList');
+  list.innerHTML = '';
+
+  sessions.forEach(s => {
+
+    const row = document.createElement('div');
+    row.className = 'sessionRow';
+
+    const openBtn = document.createElement('button');
+    openBtn.textContent = `📄 ${s.name}`;
+
+    openBtn.onclick = () => {
+      document.getElementById('inputText').value = s.text;
+      activeSessionId = s.id;
+      chunks = [];
+      renderChunks();
+    };
+
+    const renameBtn = document.createElement('button');
+    renameBtn.textContent = 'Rename';
+
+    renameBtn.onclick = () => {
+      const newName = prompt('Enter new session name:', s.name);
+      if (newName && newName.trim()) {
+        s.name = newName.trim();
+        saveSessions();
+        renderSessions();
+      }
+    };
+
+    const delBtn = document.createElement('button');
+    delBtn.textContent = 'Delete';
+
+    delBtn.onclick = () => deleteSession(s.id);
+
+    row.appendChild(openBtn);
+    row.appendChild(renameBtn);
+    row.appendChild(delBtn);
+
+    const stats = document.createElement('div');
+    stats.style.fontSize = '12px';
+    stats.style.color = '#666';
+    stats.style.marginTop = '4px';
+
+    const totalMin = Math.floor((s.totalPracticeTime || 0) / 60000);
+
+    const last = s.lastPracticeAt
+      ? new Date(s.lastPracticeAt).toLocaleString()
+      : 'Never';
+
+    stats.textContent = `Practice: ${s.practiceCount || 0} | Time: ${totalMin} min | Last: ${last}`;
+
+    row.appendChild(stats);
+
+    list.appendChild(row);
+
+  });
+}
+
+// =======================
+// FILE INPUT
+// =======================
+
+const fileInput = document.getElementById('fileInput');
+
+fileInput.addEventListener('change', async e => {
+
+  const files = Array.from(e.target.files);
+
+  for (const file of files) {
+
+    const ext = file.name.split('.').pop().toLowerCase();
+
+    if (ext === 'txt') {
+
+      const text = await file.text();
+      addSession(file.name, text);
+
+    } else if (ext === 'docx') {
+
+      const arrayBuffer = await file.arrayBuffer();
+      const result = await mammoth.extractRawText({ arrayBuffer });
+      addSession(file.name, result.value);
+
+    }
+  }
+
+});
+
+// =======================
+// MODE & DIFFICULTY
+// =======================
+
+document.querySelectorAll('input[name="mode"]').forEach(r => {
+
+  r.addEventListener('change', () => {
+    mode = document.querySelector('input[name="mode"]:checked').value;
+  });
+
+});
+
+const difficultySelect = document.getElementById('difficultySelect');
+
+if (difficultySelect) {
+  difficultySelect.addEventListener('change', e => {
+    difficulty = e.target.value;
+  });
+}
+
+// =======================
+// CHUNK GENERATION
+// =======================
+
+function autoChunk(text, min, max) {
+
+  text = text.replace(/\s+/g, ' ').trim();
+
+  if (!text) return [];
+
+  const words = text.split(' ');
+  const result = [];
+
+  let temp = [];
+
+  words.forEach(word => {
+
+    temp.push(word);
+
+    const hitMax = temp.length >= max;
+    const hitBoundary = temp.length >= min && /[.,!?]$/.test(word);
+
+    if (hitMax || hitBoundary) {
+      result.push(temp.join(' '));
+      temp = [];
+    }
+
+  });
+
+  if (temp.length) result.push(temp.join(' '));
+
+  return result;
+}
+
+function generateChunks() {
+
+  const min = parseInt(document.getElementById('minWordsSelect').value);
+  const max = parseInt(document.getElementById('maxWordsSelect').value);
+
+  chunks = autoChunk(document.getElementById('inputText').value, min, max);
+
+  renderChunks();
+}
+
+function renderChunks() {
+
+  const div = document.getElementById('chunksDiv');
+
+  div.innerHTML = '';
+
+  chunks.forEach((chunk, index) => {
+
+  const row = document.createElement('div');
+  row.style.marginBottom = '6px';
+  row.style.display = 'flex';
+  row.style.alignItems = 'center';
+  row.style.gap = '6px';
+
+  const label = document.createElement('div');
+  label.textContent = `${index + 1}.`;
+  label.style.minWidth = '28px';
+  label.style.fontSize = '13px';
+  label.style.color = '#666';
+
+  const textarea = document.createElement('textarea');
+  textarea.className = 'chunkPreview';
+  textarea.rows = 1;
+  textarea.style.flex = '1';
+  textarea.value = chunk;
+
+
+    textarea.addEventListener('input', () => {
+      chunks[index] = textarea.value;
+    });
+
+    row.appendChild(label);
+    row.appendChild(textarea);
+
+    div.appendChild(row);
+
+  });
+}
+
+// =======================
+// DRILL
+// =======================
+
+function startDrill() {
+
+  drillStartTime = Date.now();
+
+  if (!chunks.length) return;
+
+  document.getElementById('setupView').style.display = 'none';
+  document.getElementById('drillView').style.display = 'flex';
+
+  current = 0;
+  drillRunning = true;
+
+  runChunk();
+}
+
+function stopDrill() {
+
+  updatePracticeStats();
+
+  drillRunning = false;
+
+  clearTimeout(drillTimeout);
+
+  document.getElementById('setupView').style.display = 'block';
+  document.getElementById('drillView').style.display = 'none';
+
+}
+
+function runChunk() {
+
+  if (!drillRunning || current >= chunks.length) {
+    stopDrill();
+    return;
+  }
+
+  const text = chunks[current];
+
+  document.getElementById('drillChunk').textContent = text;
+
+  const canvas = document.getElementById('timerCanvas');
+  const ctx = canvas.getContext('2d');
+
+  const duration = text.split(' ').length * TIME_PER_WORD[mode] * DIFFICULTY_FACTOR[difficulty];
+
+  const start = performance.now();
+
+  const colors = ['#2ecc71','#3498db','#9b59b6','#f39c12','#1abc9c','#e74c3c','#16a085','#d35400'];
+  const color = colors[Math.floor(Math.random() * colors.length)];
+
+  function animate(now) {
+
+    const elapsed = now - start;
+
+    const progress = Math.min(elapsed / duration, 1);
+
+    const remaining = Math.max(0, Math.ceil((duration - elapsed) / 1000));
+
+    ctx.clearRect(0, 0, 200, 200);
+
+    ctx.beginPath();
+    ctx.arc(100, 100, 80, 0, Math.PI * 2);
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 10;
+    ctx.stroke();
+
+    ctx.beginPath();
+    ctx.arc(100, 100, 80, -Math.PI/2, -Math.PI/2 + progress * Math.PI * 2);
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth = 12;
+    ctx.stroke();
+
+    ctx.font = '22px Arial';
+    ctx.fillStyle = '#111';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+
+    ctx.fillText(`${remaining}s`, 100, 100);
+
+    if (progress < 1 && drillRunning) {
+      requestAnimationFrame(animate);
+    }
+  }
+
+  requestAnimationFrame(animate);
+
+  clearTimeout(drillTimeout);
+
+  drillTimeout = setTimeout(() => {
+
+    current++;
+
+    runChunk();
+
+  }, duration);
+}
+
+function nextChunk() {
+
+  current++;
+
+  runChunk();
+
+}
+
+// =======================
+// RECORDING
+// =======================
+
+async function startRecording() {
+
+  const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+
+  mediaRecorder = new MediaRecorder(stream);
+
+  audioChunks = [];
+
+  mediaRecorder.ondataavailable = e => audioChunks.push(e.data);
+
+  mediaRecorder.onstop = () => {
+
+    const blob = new Blob(audioChunks);
+
+    const url = URL.createObjectURL(blob);
+
+    recordings.push(url);
+
+    renderRecordings();
+
+  };
+
+  mediaRecorder.start();
+
+}
+
+function stopRecording() {
+
+  if (mediaRecorder) mediaRecorder.stop();
+
+}
+
+function renderRecordings() {
+
+  const list = document.getElementById('recordingsList');
+
+  list.innerHTML = '';
+
+  recordings.forEach((url, i) => {
+
+    const audio = document.createElement('audio');
+
+    audio.controls = true;
+    audio.src = url;
+
+    const del = document.createElement('button');
+
+    del.textContent = 'Delete';
+
+    del.onclick = () => {
+
+      recordings.splice(i, 1);
+
+      renderRecordings();
+
+    };
+
+    list.appendChild(audio);
+
+    list.appendChild(del);
+
+  });
+}
+
+// =======================
+// EVENTS
+// =======================
+
+document.getElementById('generateBtn').onclick = generateChunks;
+
+document.getElementById('startDrillBtn').onclick = startDrill;
+
+document.getElementById('nextBtn').onclick = nextChunk;
+
+document.getElementById('exitBtn').onclick = stopDrill;
+
+document.getElementById('recordBtn').onclick = startRecording;
+
+document.getElementById('stopRecordBtn').onclick = stopRecording;
+
+document.getElementById('recordBtn2').onclick = startRecording;
+
+document.getElementById('stopRecordBtn2').onclick = stopRecording;
+
+// =======================
+// INIT
+// =======================
+
+loadSessions();
+
+function updatePracticeStats() {
+
+  if (!activeSessionId || !drillStartTime) return;
+
+  const session = sessions.find(s => s.id === activeSessionId);
+
+  if (!session) return;
+
+  const duration = Date.now() - drillStartTime;
+
+  session.practiceCount = (session.practiceCount || 0) + 1;
+  session.totalPracticeTime = (session.totalPracticeTime || 0) + duration;
+  session.lastPracticeAt = Date.now();
+
+  saveSessions();
+  renderSessions();
+
+  drillStartTime = null;
+}
+
+</script>
+
+</body>
+</html>
