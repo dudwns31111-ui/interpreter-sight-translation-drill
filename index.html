@@ -124,24 +124,14 @@ button:hover {
 </div>
 
 <div class="card">
-<input type="file" id="fileInput" accept=".txt,.docx" multiple>
+<button id="importEngKorBtn">📂 Import (Eng → Kor)</button>
+<button id="importKorEngBtn">📂 Import (Kor → Eng)</button>
+<input type="file" id="fileInput" accept=".txt,.docx" multiple style="display:none;">
 <div id="sessionList"></div>
 </div>
 
 <div class="card">
 <textarea id="inputText" placeholder="Paste or type your speech here"></textarea>
-
-<br><br>
-
-<label>
-<input type="radio" name="mode" value="BtoA" checked>
-Eng → Kor
-</label>
-
-<label style="margin-left:10px;">
-<input type="radio" name="mode" value="AtoB">
-Kor → Eng
-</label>
 
 <br><br>
 
@@ -241,11 +231,12 @@ function loadSessions() {
   renderSessions();
 }
 
-function addSession(name, text) {
+function addSession(name, text, sessionMode = mode) {
   sessions.push({
     id: Date.now(),
     name,
     text,
+    mode: sessionMode,
     practiceCount: 0,
     totalPracticeTime: 0,
     lastPracticeAt: null
@@ -276,6 +267,7 @@ function renderSessions() {
     openBtn.onclick = () => {
       document.getElementById('inputText').value = s.text;
       activeSessionId = s.id;
+      mode = s.mode || 'BtoA';
       chunks = [];
       renderChunks();
     };
@@ -326,6 +318,17 @@ function renderSessions() {
 // =======================
 
 const fileInput = document.getElementById('fileInput');
+let pendingImportMode = 'BtoA';
+
+function startImport(importMode) {
+  pendingImportMode = importMode;
+  mode = importMode;
+  fileInput.value = '';
+  fileInput.click();
+}
+
+document.getElementById('importEngKorBtn').onclick = () => startImport('BtoA');
+document.getElementById('importKorEngBtn').onclick = () => startImport('AtoB');
 
 fileInput.addEventListener('change', async e => {
 
@@ -338,14 +341,14 @@ fileInput.addEventListener('change', async e => {
     if (ext === 'txt') {
 
       const text = await file.text();
-      addSession(file.name, text);
-
+      addSession(file.name, text, pendingImportMode);
+      
     } else if (ext === 'docx') {
 
       const arrayBuffer = await file.arrayBuffer();
       const result = await mammoth.extractRawText({ arrayBuffer });
-      addSession(file.name, result.value);
-
+      addSession(file.name, result.value, pendingImportMode);
+      
     }
   }
 
@@ -354,14 +357,6 @@ fileInput.addEventListener('change', async e => {
 // =======================
 // MODE & DIFFICULTY
 // =======================
-
-document.querySelectorAll('input[name="mode"]').forEach(r => {
-
-  r.addEventListener('change', () => {
-    mode = document.querySelector('input[name="mode"]:checked').value;
-  });
-
-});
 
 const difficultySelect = document.getElementById('difficultySelect');
 
